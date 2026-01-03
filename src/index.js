@@ -71,53 +71,73 @@ async function send(env, task) {
 
 export default {
   async fetch(req, env) {
+    // --- Health check ---
     if (req.method === "GET") {
       return new Response("TG Mirror Alive", { status: 200 })
     }
 
+    // --- Telegram webhook ---
     if (req.method === "POST") {
-      const up = await req.json()
-      const msg = up.message || up.channel_post
-      if (!msg) return new Response("OK")
+      try {
+        const up = await req.json()
 
-      const media =
-        msg.document ||
-        msg.video ||
-        msg.audio ||
-        msg.photo?.[msg.photo.length - 1] ||
-        msg.voice ||
-        msg.animation ||
-        msg.video_note ||
-        msg.sticker
+        const msg =
+          up.message ||
+          up.channel_post ||
+          up.edited_message ||
+          up.edited_channel_post
 
-      if (!media) return new Response("NO MEDIA")
+        if (!msg) {
+          return new Response("OK", { status: 200 })
+        }
 
-      const fid = media.file_unique_id
-      const db = env.INDEX.get(env.INDEX.idFromName("global"))
+        const media =
+          msg.document ||
+          msg.video ||
+          msg.audio ||
+          (msg.photo && msg.photo[msg.photo.length - 1]) ||
+          msg.voice ||
+          msg.animation ||
+          msg.video_note ||
+          msg.sticker
 
-      if (await db.has(fid)) return new Response("DUP")
+        if (!media) {
+          return new Response("OK", { status: 200 })
+        }
 
-      await db.put(fid, {
-        name: media.file_name || fid,
-        size: media.file_size,
-        mime: media.mime_type,
-        src: msg.chat.id,
-        date: msg.date,
-        target_msg: null,
-      })
+        const fid = media.file_unique_id
+        const db = env.INDEX.get(env.INDEX.idFromName("global"))
 
-      const q = env.QUEUE.get(env.QUEUE.idFromName("global"))
-      await q.push({
-        file_id: fid,
-        chat_id: env.TARGET_CHAT,
-        from_chat_id: msg.chat.id,
-        message_id: msg.message_id,
-      })
+        if (await db.has(fid)) {
+          return new Response("OK", { status: 200 })
+        }
 
-      return new Response("QUEUED")
+        await db.put(fid, {
+          name: media.file_name || fid,
+          size: media.file_size,
+          mime: media.mime_type,
+          src: msg.chat.id,
+          date: msg.date,
+          target_msg: null,
+        })
+
+        const q = env.QUEUE.get(env.QUEUE.idFromName("global"))
+        await q.push({
+          file_id: fid,
+          chat_id: env.TARGET_CHAT,
+          from_chat_id: msg.chat.id,
+          message_id: msg.message_id,
+        })
+      } catch (e) {
+        // NEVER crash webhook
+        console.error("Webhook error:", e)
+      }
+
+      // Telegram requires 200 OK always
+      return new Response("OK", { status: 200 })
     }
 
-    return new Response("OK")
+    return new Response("OK", { status: 200 })
   },
 
   async scheduled(_, env) {
