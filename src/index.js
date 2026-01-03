@@ -21,6 +21,16 @@ export class IndexDB extends DurableObject {
   async put(id, meta) {
     await this.state.storage.put(id, meta)
   }
+
+  // 🔍 READ-ONLY ADMIN ACCESS
+  async dump() {
+    const out = []
+    const list = await this.state.storage.list()
+    for (const [key, value] of list.entries()) {
+      out.push({ key, value })
+    }
+    return out
+  }
 }
 
 export class Queue extends DurableObject {
@@ -41,6 +51,11 @@ export class Queue extends DurableObject {
     await this.state.storage.put("q", q)
     return t
   }
+
+  // 🔍 READ-ONLY ADMIN ACCESS
+  async dump() {
+    return (await this.state.storage.get("q")) || []
+  }
 }
 
 // =====================
@@ -59,10 +74,10 @@ async function send(env, task) {
 
   const j = await r.json()
 
-  // Old / missing messages during backfill → ignore
+  // Ignore failures (old / inaccessible messages)
   if (!j.ok) return
 
-  // Skip DB update for backfill jobs
+  // Skip DB update for backfill tasks
   if (task.file_id.startsWith("bf_")) return
 
   const db = env.INDEX.get(env.INDEX.idFromName("global"))
@@ -85,13 +100,11 @@ async function backfill(env) {
   const q = env.QUEUE.get(env.QUEUE.idFromName("global"))
 
   for (const chat of chats) {
-    // Cursor = last message_id we tried
     let cursor = await db.get(`bf_${chat}`)
 
-    // First run: assume very high message_id
+    // First run → assume very high message_id
     if (!cursor) cursor = 10_000_000
 
-    // Push a small batch (rate-safe)
     const BATCH = 10
 
     for (let i = 0; i < BATCH; i++) {
