@@ -22,7 +22,7 @@ export class IndexDB extends DurableObject {
     await this.state.storage.put(id, meta)
   }
 
-  // 🔍 READ-ONLY ADMIN ACCESS
+  // 🔍 READ-ONLY (for admin worker)
   async dump() {
     const out = []
     const list = await this.state.storage.list()
@@ -52,7 +52,7 @@ export class Queue extends DurableObject {
     return t
   }
 
-  // 🔍 READ-ONLY ADMIN ACCESS
+  // 🔍 READ-ONLY (for admin worker)
   async dump() {
     return (await this.state.storage.get("q")) || []
   }
@@ -160,18 +160,25 @@ export default {
 
         if (!media) return new Response("OK", { status: 200 })
 
+        // 🔑 Dedup key (unchanged)
         const fid = media.file_unique_id
+
+        // 🔑 REAL file id (NEW – required for thumbnails)
+        const realFileId = media.file_id
+
         const db = env.INDEX.get(env.INDEX.idFromName("global"))
 
-        // Dedup
+        // Dedup check
         if (await db.has(fid)) return new Response("OK", { status: 200 })
 
+        // Store metadata + file_id
         await db.put(fid, {
           name: media.file_name || fid,
           size: media.file_size,
           mime: media.mime_type,
           src: msg.chat.id,
           date: msg.date,
+          file_id: realFileId,   // ✅ ADDED
           target_msg: null,
         })
 
