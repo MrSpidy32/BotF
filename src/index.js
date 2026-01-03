@@ -1,9 +1,12 @@
+import { DurableObject } from "cloudflare:workers"
+
 // =====================
 // Durable Objects
 // =====================
 
-export class IndexDB {
+export class IndexDB extends DurableObject {
   constructor(state) {
+    super(state)
     this.state = state
   }
 
@@ -20,8 +23,9 @@ export class IndexDB {
   }
 }
 
-export class Queue {
+export class Queue extends DurableObject {
   constructor(state) {
+    super(state)
     this.state = state
   }
 
@@ -71,12 +75,10 @@ async function send(env, task) {
 
 export default {
   async fetch(req, env) {
-    // --- Health check ---
     if (req.method === "GET") {
       return new Response("TG Mirror Alive", { status: 200 })
     }
 
-    // --- Telegram webhook ---
     if (req.method === "POST") {
       try {
         const up = await req.json()
@@ -87,9 +89,7 @@ export default {
           up.edited_message ||
           up.edited_channel_post
 
-        if (!msg) {
-          return new Response("OK", { status: 200 })
-        }
+        if (!msg) return new Response("OK", { status: 200 })
 
         const media =
           msg.document ||
@@ -101,16 +101,12 @@ export default {
           msg.video_note ||
           msg.sticker
 
-        if (!media) {
-          return new Response("OK", { status: 200 })
-        }
+        if (!media) return new Response("OK", { status: 200 })
 
         const fid = media.file_unique_id
         const db = env.INDEX.get(env.INDEX.idFromName("global"))
 
-        if (await db.has(fid)) {
-          return new Response("OK", { status: 200 })
-        }
+        if (await db.has(fid)) return new Response("OK", { status: 200 })
 
         await db.put(fid, {
           name: media.file_name || fid,
@@ -129,11 +125,9 @@ export default {
           message_id: msg.message_id,
         })
       } catch (e) {
-        // NEVER crash webhook
         console.error("Webhook error:", e)
       }
 
-      // Telegram requires 200 OK always
       return new Response("OK", { status: 200 })
     }
 
