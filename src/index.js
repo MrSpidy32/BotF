@@ -1,8 +1,8 @@
 import { DurableObject } from "cloudflare:workers"
 
-// =====================
-// Durable Objects
-// =====================
+/* =========================
+   Durable Objects
+========================= */
 
 export class IndexDB extends DurableObject {
   constructor(state, env) {
@@ -10,23 +10,21 @@ export class IndexDB extends DurableObject {
     this.state = state
   }
 
-  async has(id) {
-    return (await this.state.storage.get(id)) !== undefined
+  async has(key) {
+    return (await this.state.storage.get(key)) !== undefined
   }
 
-  async get(id) {
-    return await this.state.storage.get(id)
+  async get(key) {
+    return await this.state.storage.get(key)
   }
 
-  async put(id, meta) {
-    await this.state.storage.put(id, meta)
+  async put(key, value) {
+    await this.state.storage.put(key, value)
   }
 
-  // 🔍 READ-ONLY (for admin worker)
   async dump() {
     const out = []
-    const list = await this.state.storage.list()
-    for (const [key, value] of list.entries()) {
+    for (const [key, value] of (await this.state.storage.list()).entries()) {
       out.push({ key, value })
     }
     return out
@@ -39,152 +37,147 @@ export class Queue extends DurableObject {
     this.state = state
   }
 
-  async push(t) {
+  async push(item) {
     const q = (await this.state.storage.get("q")) || []
-    q.push(t)
+    q.push(item)
     await this.state.storage.put("q", q)
   }
 
   async pop() {
     const q = (await this.state.storage.get("q")) || []
-    const t = q.shift()
+    const item = q.shift()
     await this.state.storage.put("q", q)
-    return t
+    return item
   }
 
-  // 🔍 READ-ONLY (for admin worker)
   async dump() {
     return (await this.state.storage.get("q")) || []
   }
 }
 
-// =====================
-// Telegram sender
-// =====================
+/* =========================
+   Telegram sender
+========================= */
 
 async function send(env, task) {
-  const r = await fetch(
+  const res = await fetch(
     `https://api.telegram.org/bot${env.BOT_TOKEN}/copyMessage`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(task),
+      body: JSON.stringify({
+        chat_id: task.chat_id,
+        from_chat_id: task.from_chat_id,
+        message_id: task.message_id,
+      }),
     }
   )
 
-  const j = await r.json()
+  const json = await res.json()
 
-  // Ignore failures (old / inaccessible messages)
-  if (!j.ok) return
+  if (!json.ok) {
+    console.error("Telegram send failed:", json)
+    return
+  }
 
-  // Skip DB update for backfill tasks
-  if (task.file_id.startsWith("bf_")) return
-
-  const db = env.INDEX.get(env.INDEX.idFromName("global"))
-  const meta = await db.get(task.file_id)
-  if (meta) {
-    meta.target_msg = j.result.message_id
-    await db.put(task.file_id, meta)
+  // Only update DB for LIVE messages (not backfill)
+  if (task.type === "live") {
+    const db = env.INDEX.get(env.INDEX.idFromName("global"))
+    const meta = await db.get(task.key)
+    if (meta) {
+      meta.target_msg = json.result.message_id
+      await db.put(task.key, meta)
+    }
   }
 }
 
-// =====================
-// Backfill logic (LATEST → OLDEST)
-// =====================
+/* =========================
+   Backfill logic
+========================= */
 
 async function backfill(env) {
   if (!env.BACKFILL_CHATS) return
 
-  const chats = env.BACKFILL_CHATS.split(",").map(x => x.trim())
+  const chats = env.BACKFILL_CHATS.split(",").map(c => c.trim())
   const db = env.INDEX.get(env.INDEX.idFromName("global"))
   const q = env.QUEUE.get(env.QUEUE.idFromName("global"))
 
+  const BATCH = 5
+
   for (const chat of chats) {
     let cursor = await db.get(`bf_${chat}`)
-
-    // First run → assume very high message_id
-    if (!cursor) cursor = 10_000_000
-
-    const BATCH = 10
+    if (typeof cursor !== "number") cursor = 10_000_000
 
     for (let i = 0; i < BATCH; i++) {
       const mid = cursor - i
       if (mid <= 0) break
 
       await q.push({
-        file_id: `bf_${chat}_${mid}`,
+        type: "backfill",
         chat_id: env.TARGET_CHAT,
-        from_chat_id: chat,
+        from_chat_id: Number(chat),
         message_id: mid,
       })
     }
 
-    // Move cursor backwards
-    await db.put(`bf_${chat}`, cursor - BATCH)
+    await db.put(`bf_${chat}`, Math.max(cursor - BATCH, 0))
   }
 }
 
-// =====================
-// Worker entry
-// =====================
+/* =========================
+   Worker entry
+========================= */
 
 export default {
   async fetch(req, env) {
-    // Health check
     if (req.method === "GET") {
       return new Response("TG Mirror Alive", { status: 200 })
     }
 
-    // Telegram webhook
     if (req.method === "POST") {
       try {
-        const up = await req.json()
+        const update = await req.json()
 
         const msg =
-          up.message ||
-          up.channel_post ||
-          up.edited_message ||
-          up.edited_channel_post
+          update.message ||
+          update.channel_post ||
+          update.edited_message ||
+          update.edited_channel_post
 
-        if (!msg) return new Response("OK", { status: 200 })
+        if (!msg) return new Response("OK")
 
         const media =
           msg.document ||
           msg.video ||
           msg.audio ||
-          (msg.photo && msg.photo[msg.photo.length - 1]) ||
+          (msg.photo && msg.photo.at(-1)) ||
           msg.voice ||
           msg.animation ||
           msg.video_note ||
           msg.sticker
 
-        if (!media) return new Response("OK", { status: 200 })
+        if (!media) return new Response("OK")
 
-        // 🔑 Dedup key (unchanged)
-        const fid = media.file_unique_id
-
-        // 🔑 REAL file id (NEW – required for thumbnails)
+        const key = media.file_unique_id
         const realFileId = media.file_id
 
         const db = env.INDEX.get(env.INDEX.idFromName("global"))
+        if (await db.has(key)) return new Response("OK")
 
-        // Dedup check
-        if (await db.has(fid)) return new Response("OK", { status: 200 })
-
-        // Store metadata + file_id
-        await db.put(fid, {
-          name: media.file_name || fid,
-          size: media.file_size,
-          mime: media.mime_type,
+        await db.put(key, {
+          name: media.file_name || key,
+          size: media.file_size || 0,
+          mime: media.mime_type || "unknown",
           src: msg.chat.id,
           date: msg.date,
-          file_id: realFileId,   // ✅ ADDED
+          file_id: realFileId,
           target_msg: null,
         })
 
         const q = env.QUEUE.get(env.QUEUE.idFromName("global"))
         await q.push({
-          file_id: fid,
+          type: "live",
+          key,
           chat_id: env.TARGET_CHAT,
           from_chat_id: msg.chat.id,
           message_id: msg.message_id,
@@ -193,19 +186,17 @@ export default {
         console.error("Webhook error:", e)
       }
 
-      return new Response("OK", { status: 200 })
+      return new Response("OK")
     }
 
-    return new Response("OK", { status: 200 })
+    return new Response("OK")
   },
 
   async scheduled(_, env) {
-    // 1️⃣ Backfill newest → older
     await backfill(env)
 
-    // 2️⃣ Send ONE queued item (rate-safe)
     const q = env.QUEUE.get(env.QUEUE.idFromName("global"))
-    const t = await q.pop()
-    if (t) await send(env, t)
+    const task = await q.pop()
+    if (task) await send(env, task)
   },
 }
