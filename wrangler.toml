@@ -10,4 +10,4 @@ bindings = [
 
 [[migrations]]
 tag = "v1"
-new_classes = ["Queue", "IndexDB"]
+new_sqlite_classes = ["Queue", "IndexDB"]
