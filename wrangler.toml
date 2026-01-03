@@ -1,0 +1,14 @@
+name = "tg-mirror"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+[[durable_objects.bindings]]
+name = "QUEUE"
+class_name = "Queue"
+
+[[durable_objects.bindings]]
+name = "INDEX"
+class_name = "IndexDB"
+
+[triggers]
+crons = ["*/1 * * * *"]
