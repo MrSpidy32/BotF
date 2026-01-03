@@ -1,4 +1,4 @@
-name = "cool-snowflake-9f45"
+name = "tg-mirror-polling"
 main = "src/index.js"
 compatibility_date = "2026-01-03"
 
@@ -11,3 +11,6 @@ bindings = [
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Queue", "IndexDB"]
+
+[triggers]
+crons = ["* * * * *"] # every minute
