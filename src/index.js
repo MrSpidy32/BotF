@@ -5,8 +5,8 @@ import { DurableObject } from "cloudflare:workers"
 // =====================
 
 export class IndexDB extends DurableObject {
-  constructor(state) {
-    super(state)
+  constructor(state, env) {
+    super(state, env)
     this.state = state
   }
 
@@ -24,8 +24,8 @@ export class IndexDB extends DurableObject {
 }
 
 export class Queue extends DurableObject {
-  constructor(state) {
-    super(state)
+  constructor(state, env) {
+    super(state, env)
     this.state = state
   }
 
