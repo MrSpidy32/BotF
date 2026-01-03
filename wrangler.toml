@@ -13,4 +13,4 @@ tag = "v1"
 new_sqlite_classes = ["Queue", "IndexDB"]
 
 [triggers]
-crons = ["* * * * *"] # every minute
+crons = ["* * * * *"] # required to drain queue
