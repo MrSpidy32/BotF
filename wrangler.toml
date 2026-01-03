@@ -1,15 +1,13 @@
-# wrangler.toml
-name = 'cool-snowflake-9f45'
+name = "cool-snowflake-9f45"
 main = "src/index.js"
-compatibility_date = "2025-01-03"
+compatibility_date = "2026-01-03"
 
-[[durable_objects.bindings]]
-name = "QUEUE"
-class_name = "Queue"
+[durable_objects]
+bindings = [
+  { name = "QUEUE", class_name = "Queue" },
+  { name = "INDEX", class_name = "IndexDB" }
+]
 
-[[durable_objects.bindings]]
-name = "INDEX"
-class_name = "IndexDB"
-
-[triggers]
-crons = ["*/1 * * * *"]
+[[migrations]]
+tag = "v1"
+new_classes = ["Queue", "IndexDB"]
